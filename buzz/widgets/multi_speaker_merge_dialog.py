@@ -1,5 +1,7 @@
 from typing import Optional, List, Tuple
 from pathlib import Path
+import json
+import os
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -8,6 +10,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox, QCheckBox, QComboBox, QMessageBox, QGroupBox,
     QLineEdit, QWidget
 )
+from platformdirs import user_config_dir
 
 from buzz.locale import _
 from buzz.multi_speaker_merge import MultiSpeakerTranscriptionMerger
@@ -18,6 +21,17 @@ class MultiSpeakerMergeDialog(QDialog):
     
     merge_completed = pyqtSignal(str)  # Emits output file path
     
+    # Default settings
+    DEFAULT_TIME_DELTA = 2.0
+    DEFAULT_CONSOLIDATE = True
+    DEFAULT_FIX_OVERLAPPING = True
+    DEFAULT_OVERLAP_THRESHOLD = 0.1
+    DEFAULT_WPM = 150
+    DEFAULT_SPACING = 0.1
+    DEFAULT_FORMAT = "txt"
+    DEFAULT_TIMESTAMPS = True
+    DEFAULT_SPEAKER = True
+    
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         
@@ -27,7 +41,13 @@ class MultiSpeakerMergeDialog(QDialog):
         
         self.transcription_files: List[Tuple[str, str]] = []
         
+        # Set up config file path
+        config_dir = user_config_dir("Buzz")
+        os.makedirs(config_dir, exist_ok=True)
+        self.config_file = os.path.join(config_dir, "multi_speaker_merge.json")
+        
         self._setup_ui()
+        self._load_settings()
     
     def _setup_ui(self):
         layout = QVBoxLayout()
@@ -67,6 +87,11 @@ class MultiSpeakerMergeDialog(QDialog):
         self.remove_file_btn.clicked.connect(self._remove_file)
         self.remove_file_btn.setEnabled(False)
         file_btn_layout.addWidget(self.remove_file_btn)
+        
+        self.clear_files_btn = QPushButton(_("Clear All"))
+        self.clear_files_btn.clicked.connect(self._clear_files)
+        self.clear_files_btn.setEnabled(False)
+        file_btn_layout.addWidget(self.clear_files_btn)
         
         file_btn_layout.addStretch()
         file_layout.addLayout(file_btn_layout)
@@ -186,6 +211,14 @@ class MultiSpeakerMergeDialog(QDialog):
         self.speaker_check.setChecked(True)
         options_layout.addWidget(self.speaker_check)
         
+        # Reset button
+        reset_layout = QHBoxLayout()
+        reset_layout.addStretch()
+        self.reset_btn = QPushButton(_("Reset to Defaults"))
+        self.reset_btn.clicked.connect(self._reset_settings)
+        reset_layout.addWidget(self.reset_btn)
+        options_layout.addLayout(reset_layout)
+        
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
         
@@ -218,8 +251,29 @@ class MultiSpeakerMergeDialog(QDialog):
         
         self.setLayout(layout)
         
-        # Connect signals
+        # Connect signals for button updates
         self.file_table.itemSelectionChanged.connect(self._update_buttons)
+        
+        # Connect signals for auto-save on value changes
+        self.time_delta_spin.valueChanged.connect(self._save_settings)
+        self.overlap_threshold_spin.valueChanged.connect(self._save_settings)
+        self.wpm_spin.valueChanged.connect(self._save_settings)
+        self.spacing_spin.valueChanged.connect(self._save_settings)
+        self.consolidate_check.toggled.connect(self._save_settings)
+        self.fix_overlapping_check.toggled.connect(self._save_settings)
+        self.timestamps_check.toggled.connect(self._save_settings)
+        self.speaker_check.toggled.connect(self._save_settings)
+        self.format_combo.currentTextChanged.connect(self._save_settings)
+    
+    def reject(self):
+        """Handle dialog rejection (Close button or Escape key)"""
+        self._save_settings()
+        super().reject()
+    
+    def closeEvent(self, event):
+        """Save settings when dialog is closed with X button"""
+        self._save_settings()
+        super().closeEvent(event)
     
     def _add_file(self):
         """Add a transcription file to the list"""
@@ -289,7 +343,80 @@ class MultiSpeakerMergeDialog(QDialog):
         has_output = bool(self.output_path_edit.text().strip())
         
         self.remove_file_btn.setEnabled(has_selection)
+        self.clear_files_btn.setEnabled(self.file_table.rowCount() > 0)
         self.merge_btn.setEnabled(has_files and has_output)
+    
+    def _load_settings(self):
+        """Load saved settings from JSON config file"""
+        if not os.path.exists(self.config_file):
+            return
+        
+        try:
+            with open(self.config_file, 'r') as f:
+                settings = json.load(f)
+            
+            # Load numeric settings
+            self.time_delta_spin.setValue(settings.get("time_delta", self.DEFAULT_TIME_DELTA))
+            self.overlap_threshold_spin.setValue(settings.get("overlap_threshold", self.DEFAULT_OVERLAP_THRESHOLD))
+            self.wpm_spin.setValue(settings.get("duration_estimation_wpm", self.DEFAULT_WPM))
+            self.spacing_spin.setValue(settings.get("sequential_spacing", self.DEFAULT_SPACING))
+            
+            # Load checkbox settings
+            self.consolidate_check.setChecked(settings.get("consolidate", self.DEFAULT_CONSOLIDATE))
+            self.fix_overlapping_check.setChecked(settings.get("fix_overlapping", self.DEFAULT_FIX_OVERLAPPING))
+            self.timestamps_check.setChecked(settings.get("timestamps", self.DEFAULT_TIMESTAMPS))
+            self.speaker_check.setChecked(settings.get("speaker", self.DEFAULT_SPEAKER))
+            
+            # Load format
+            format_value = settings.get("format", self.DEFAULT_FORMAT)
+            index = self.format_combo.findText(format_value)
+            if index >= 0:
+                self.format_combo.setCurrentIndex(index)
+        except Exception as e:
+            # If there's any error loading settings, just use defaults
+            pass
+    
+    def _save_settings(self):
+        """Save current settings to JSON config file"""
+        settings = {
+            "time_delta": self.time_delta_spin.value(),
+            "overlap_threshold": self.overlap_threshold_spin.value(),
+            "duration_estimation_wpm": self.wpm_spin.value(),
+            "sequential_spacing": self.spacing_spin.value(),
+            "consolidate": self.consolidate_check.isChecked(),
+            "fix_overlapping": self.fix_overlapping_check.isChecked(),
+            "timestamps": self.timestamps_check.isChecked(),
+            "speaker": self.speaker_check.isChecked(),
+            "format": self.format_combo.currentText()
+        }
+        
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(settings, f, indent=2)
+        except Exception as e:
+            # Silently fail if we can't save settings
+            pass
+    
+    def _reset_settings(self):
+        """Reset all settings to default values"""
+        self.time_delta_spin.setValue(self.DEFAULT_TIME_DELTA)
+        self.overlap_threshold_spin.setValue(self.DEFAULT_OVERLAP_THRESHOLD)
+        self.wpm_spin.setValue(self.DEFAULT_WPM)
+        self.spacing_spin.setValue(self.DEFAULT_SPACING)
+        self.consolidate_check.setChecked(self.DEFAULT_CONSOLIDATE)
+        self.fix_overlapping_check.setChecked(self.DEFAULT_FIX_OVERLAPPING)
+        self.timestamps_check.setChecked(self.DEFAULT_TIMESTAMPS)
+        self.speaker_check.setChecked(self.DEFAULT_SPEAKER)
+        
+        index = self.format_combo.findText(self.DEFAULT_FORMAT)
+        if index >= 0:
+            self.format_combo.setCurrentIndex(index)
+    
+    def _clear_files(self):
+        """Clear all files from the list"""
+        self.file_table.setRowCount(0)
+        self.transcription_files.clear()
+        self._update_buttons()
     
     def _merge(self):
         """Perform the merge operation"""
@@ -334,6 +461,9 @@ class MultiSpeakerMergeDialog(QDialog):
                     len(transcription_files), output_path
                 )
             )
+            
+            # Save settings for next time
+            self._save_settings()
             
             self.merge_completed.emit(output_path)
             
