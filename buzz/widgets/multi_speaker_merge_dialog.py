@@ -100,6 +100,73 @@ class MultiSpeakerMergeDialog(QDialog):
         )
         options_layout.addWidget(self.consolidate_check)
         
+        # Fix overlapping speech checkbox
+        self.fix_overlapping_check = QCheckBox(_("Fix overlapping speech"))
+        self.fix_overlapping_check.setChecked(True)
+        self.fix_overlapping_check.setToolTip(
+            _("Intelligently merge segments when speakers talk simultaneously.\nShorter lines (interjections) are placed first, followed by the speaker who started first.")
+        )
+        options_layout.addWidget(self.fix_overlapping_check)
+        
+        # Overlapping speech parameters (sub-options)
+        overlap_params_group = QGroupBox(_("Overlapping Speech Parameters"))
+        overlap_params_layout = QVBoxLayout()
+        
+        # Overlap threshold
+        overlap_threshold_layout = QHBoxLayout()
+        overlap_threshold_layout.addWidget(QLabel(_("Overlap threshold (seconds):")))
+        self.overlap_threshold_spin = QDoubleSpinBox()
+        self.overlap_threshold_spin.setRange(0.01, 5.0)
+        self.overlap_threshold_spin.setValue(0.1)
+        self.overlap_threshold_spin.setSingleStep(0.05)
+        self.overlap_threshold_spin.setDecimals(2)
+        self.overlap_threshold_spin.setToolTip(
+            _("Maximum time gap between segments to consider as overlapping speech.\nLower values detect tighter overlaps. Try 0.1-0.3 seconds.")
+        )
+        overlap_threshold_layout.addWidget(self.overlap_threshold_spin)
+        overlap_threshold_layout.addStretch()
+        overlap_params_layout.addLayout(overlap_threshold_layout)
+        
+        # Duration estimation WPM
+        wpm_layout = QHBoxLayout()
+        wpm_layout.addWidget(QLabel(_("Speaking rate (words/min):")))
+        self.wpm_spin = QSpinBox()
+        self.wpm_spin.setRange(50, 300)
+        self.wpm_spin.setValue(150)
+        self.wpm_spin.setSingleStep(10)
+        self.wpm_spin.setToolTip(
+            _("Estimated speaking rate for duration calculation when consolidating overlaps.\nTypical range: 120-180 words per minute.")
+        )
+        wpm_layout.addWidget(self.wpm_spin)
+        wpm_layout.addStretch()
+        overlap_params_layout.addLayout(wpm_layout)
+        
+        # Sequential spacing
+        spacing_layout = QHBoxLayout()
+        spacing_layout.addWidget(QLabel(_("Gap between speakers (seconds):")))
+        self.spacing_spin = QDoubleSpinBox()
+        self.spacing_spin.setRange(0.0, 2.0)
+        self.spacing_spin.setValue(0.1)
+        self.spacing_spin.setSingleStep(0.05)
+        self.spacing_spin.setDecimals(2)
+        self.spacing_spin.setToolTip(
+            _("Time gap to insert between consolidated speaker segments.\nTypical: 0.05-0.2 seconds.")
+        )
+        spacing_layout.addWidget(self.spacing_spin)
+        spacing_layout.addStretch()
+        overlap_params_layout.addLayout(spacing_layout)
+        
+        overlap_params_group.setLayout(overlap_params_layout)
+        options_layout.addWidget(overlap_params_group)
+        
+        # Enable/disable overlap parameters based on checkbox
+        def toggle_overlap_params():
+            enabled = self.fix_overlapping_check.isChecked()
+            overlap_params_group.setEnabled(enabled)
+        
+        self.fix_overlapping_check.toggled.connect(toggle_overlap_params)
+        toggle_overlap_params()  # Set initial state
+        
         # Output format
         format_layout = QHBoxLayout()
         format_layout.addWidget(QLabel(_("Output format:")))
@@ -251,6 +318,10 @@ class MultiSpeakerMergeDialog(QDialog):
                 output_path=output_path,
                 time_delta=self.time_delta_spin.value(),
                 consolidate=self.consolidate_check.isChecked(),
+                fix_overlapping_speech=self.fix_overlapping_check.isChecked(),
+                overlap_threshold=self.overlap_threshold_spin.value(),
+                duration_estimation_wpm=self.wpm_spin.value(),
+                sequential_spacing=self.spacing_spin.value(),
                 output_format=self.format_combo.currentText(),
                 include_timestamps=self.timestamps_check.isChecked(),
                 include_speaker=self.speaker_check.isChecked()

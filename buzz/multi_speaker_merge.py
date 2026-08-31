@@ -41,6 +41,9 @@ class MultiSpeakerTranscriptionMerger:
                        before creating a line break. Default is 2.0 seconds.
         """
         self.time_delta = time_delta
+        self.overlap_threshold = 0.1  # Default overlap threshold in seconds
+        self.duration_estimation_wpm = 150  # Words per minute for duration estimation
+        self.sequential_spacing = 0.1  # Gap between consolidated speakers
         self.logger = logging.getLogger(__name__)
     
     def parse_srt_file(self, file_path: Path, speaker_id: str) -> List[TimestampedSegment]:
@@ -422,6 +425,142 @@ class MultiSpeakerTranscriptionMerger:
         self.logger.info(f"Consolidated {len(segments)} segments into {len(consolidated)} lines")
         return consolidated
     
+    def detect_and_merge_overlapping_speech(self, segments: List[TimestampedSegment]) -> List[TimestampedSegment]:
+        """
+        Detect and intelligently merge segments where speakers talk simultaneously or in very rapid succession.
+        
+        When speakers overlap or speak with minimal gaps:
+        - Groups segments that are very close together in time
+        - Consolidates each speaker's text within the overlap
+        - Orders by: shortest line first (typically interjections), then by who started first
+        
+        Args:
+            segments: List of timestamped segments (should be sorted by time)
+        
+        Returns:
+            List with overlapping speech consolidated
+        """
+        if not segments:
+            return []
+        
+        result = []
+        i = 0
+        
+        while i < len(segments):
+            current = segments[i]
+            overlapping_group = [current]
+            
+            # Find all segments that overlap or are very close in time
+            j = i + 1
+            while j < len(segments):
+                next_seg = segments[j]
+                
+                # Check if next segment overlaps or is very close to any in the group
+                is_related = False
+                for seg in overlapping_group:
+                    # Calculate overlap duration (can be negative for gap)
+                    overlap_start = max(seg.start_time, next_seg.start_time)
+                    overlap_end = min(seg.end_time, next_seg.end_time)
+                    overlap_duration = overlap_end - overlap_start
+                    
+                    # Also check gap between segments (time between end of one and start of next)
+                    gap = next_seg.start_time - seg.end_time
+                    
+                    # Consider related if:
+                    # 1. They overlap (overlap_duration >= 0) OR
+                    # 2. Gap is very small (less than overlap_threshold) AND they're different speakers
+                    if (overlap_duration >= -self.overlap_threshold and 
+                        next_seg.speaker_id != seg.speaker_id):
+                        # Very close in time and different speakers = likely interleaved speech
+                        is_related = True
+                        break
+                
+                if is_related:
+                    overlapping_group.append(next_seg)
+                    j += 1
+                else:
+                    break
+            
+            # Process the overlapping group
+            if len(overlapping_group) > 1:
+                # Check if this is truly interleaved (multiple speakers in short timeframe)
+                speakers_in_group = set(seg.speaker_id for seg in overlapping_group)
+                if len(speakers_in_group) > 1:
+                    # Multiple speakers in quick succession - merge intelligently
+                    merged = self._merge_overlapping_group(overlapping_group)
+                    result.extend(merged)
+                else:
+                    # Same speaker, just add all segments
+                    result.extend(overlapping_group)
+            else:
+                # Single segment, no overlap
+                result.append(current)
+            
+            i = j if j > i + 1 else i + 1
+        
+        self.logger.info(f"Processed overlapping speech: {len(segments)} -> {len(result)} segments")
+        return result
+    
+    def _merge_overlapping_group(self, group: List[TimestampedSegment]) -> List[TimestampedSegment]:
+        """
+        Merge a group of overlapping segments intelligently.
+        
+        Strategy:
+        1. Group segments by speaker
+        2. Consolidate each speaker's text
+        3. Sort by: text length (shorter first), then start time (earlier first)
+        4. Adjust timestamps to be sequential
+        """
+        # Group by speaker
+        speaker_segments = {}
+        for seg in group:
+            if seg.speaker_id not in speaker_segments:
+                speaker_segments[seg.speaker_id] = []
+            speaker_segments[seg.speaker_id].append(seg)
+        
+        # Consolidate each speaker's segments
+        consolidated_speakers = []
+        for speaker_id, segs in speaker_segments.items():
+            # Sort by start time
+            segs.sort(key=lambda x: x.start_time)
+            
+            # Merge all text for this speaker
+            combined_text = ' '.join(seg.text for seg in segs)
+            earliest_start = min(seg.start_time for seg in segs)
+            latest_end = max(seg.end_time for seg in segs)
+            
+            consolidated_speakers.append({
+                'speaker_id': speaker_id,
+                'text': combined_text,
+                'start_time': earliest_start,
+                'end_time': latest_end,
+                'text_length': len(combined_text.strip())
+            })
+        
+        # Sort by: shortest text first (interjections), then earliest start time
+        consolidated_speakers.sort(key=lambda x: (x['text_length'], x['start_time']))
+        
+        # Create output segments with adjusted timestamps
+        result = []
+        current_time = consolidated_speakers[0]['start_time']
+        
+        for speaker_data in consolidated_speakers:
+            # Estimate duration based on text length (rough approximation)
+            # Use instance variable for WPM
+            text_length = len(speaker_data['text'].strip())
+            estimated_duration = max(0.5, text_length / (self.duration_estimation_wpm * 5 / 60))  # minimum 0.5 seconds
+            
+            result.append(TimestampedSegment(
+                start_time=current_time,
+                end_time=current_time + estimated_duration,
+                text=speaker_data['text'].strip(),
+                speaker_id=speaker_data['speaker_id']
+            ))
+            
+            current_time += estimated_duration + self.sequential_spacing  # Configurable gap between speakers
+        
+        return result
+    
     def export_to_text(self, segments: List[TimestampedSegment], output_path: Path,
                       include_timestamps: bool = True, include_speaker: bool = True):
         """
@@ -499,6 +638,10 @@ def merge_multi_speaker_transcriptions(
     output_path: str,
     time_delta: float = 2.0,
     consolidate: bool = True,
+    fix_overlapping_speech: bool = True,
+    overlap_threshold: float = 0.1,
+    duration_estimation_wpm: int = 150,
+    sequential_spacing: float = 0.1,
     output_format: str = "txt",
     include_timestamps: bool = True,
     include_speaker: bool = True
@@ -511,6 +654,10 @@ def merge_multi_speaker_transcriptions(
         output_path: Path for output file
         time_delta: Maximum pause between segments to merge (seconds)
         consolidate: Whether to consolidate consecutive speaker lines
+        fix_overlapping_speech: Whether to detect and intelligently merge overlapping speech
+        overlap_threshold: Max time gap to consider as overlapping (seconds)
+        duration_estimation_wpm: Speaking rate for duration estimation (words per minute)
+        sequential_spacing: Gap between consolidated speakers (seconds)
         output_format: Output format ("txt", "srt", "json")
         include_timestamps: Include timestamps in text output
         include_speaker: Include speaker labels in text output
@@ -519,11 +666,20 @@ def merge_multi_speaker_transcriptions(
     
     merger = MultiSpeakerTranscriptionMerger(time_delta=time_delta)
     
+    # Set overlap parameters
+    merger.overlap_threshold = overlap_threshold
+    merger.duration_estimation_wpm = duration_estimation_wpm
+    merger.sequential_spacing = sequential_spacing
+    
     # Convert string paths to Path objects
     file_tuples = [(Path(f), speaker) for f, speaker in transcription_files]
     
     # Merge transcriptions
     segments = merger.merge_transcriptions(file_tuples)
+    
+    # Fix overlapping speech if requested (before consolidation)
+    if fix_overlapping_speech:
+        segments = merger.detect_and_merge_overlapping_speech(segments)
     
     # Consolidate if requested
     if consolidate:

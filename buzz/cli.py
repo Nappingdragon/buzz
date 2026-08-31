@@ -293,6 +293,12 @@ def add_merge_parser(subparsers):
     )
     
     merge_parser.add_argument(
+        '--no-fix-overlapping',
+        action='store_true',
+        help='Do not fix overlapping speech segments'
+    )
+    
+    merge_parser.add_argument(
         '--format',
         choices=['txt', 'srt', 'json'],
         default='txt',
@@ -333,6 +339,7 @@ def handle_merge_command(args):
             output_path=args.output,
             time_delta=args.time_delta,
             consolidate=not args.no_consolidate,
+            fix_overlapping_speech=not args.no_fix_overlapping,
             output_format=args.format,
             include_timestamps=not args.no_timestamps,
             include_speaker=not args.no_speaker
@@ -371,6 +378,7 @@ def parse(app: Application, parser: QCommandLineParser):
         merge_args.output = parser.positionalArguments()[-1]
         merge_args.time_delta = 2.0
         merge_args.no_consolidate = False
+        merge_args.no_fix_overlapping = False
         merge_args.format = "txt"
         merge_args.no_timestamps = False
         merge_args.no_speaker = False
@@ -381,6 +389,8 @@ def parse(app: Application, parser: QCommandLineParser):
                     merge_args.time_delta = opt.value()
                 elif opt == parser.optionForName("no-consolidate"):
                     merge_args.no_consolidate = True
+                elif opt == parser.optionForName("no-fix-overlapping"):
+                    merge_args.no_fix_overlapping = True
                 elif opt == parser.optionForName("format"):
                     merge_args.format = opt.value()
                 elif opt == parser.optionForName("no-timestamps"):
