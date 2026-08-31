@@ -1,4 +1,5 @@
 import enum
+import logging
 import sys
 import typing
 import urllib.parse
@@ -21,6 +22,7 @@ from buzz.transcriber.transcriber import (
     OutputFormat,
 )
 from buzz.widgets.application import Application
+from buzz.multi_speaker_merge import merge_multi_speaker_transcriptions
 
 
 class CommandLineError(Exception):
@@ -257,6 +259,90 @@ def _handle_add_command(app: Application, parser: QCommandLineParser):
         app.hide_main_window = True
 
 
+def add_merge_parser(subparsers):
+    """Add multi-speaker merge command to CLI"""
+    merge_parser = subparsers.add_parser(
+        'merge',
+        help='Merge multiple speaker transcriptions into a single file'
+    )
+    
+    merge_parser.add_argument(
+        'output',
+        type=str,
+        help='Output file path'
+    )
+    
+    merge_parser.add_argument(
+        'transcriptions',
+        nargs='+',
+        type=str,
+        help='Transcription files in format: filepath:SpeakerName (e.g., track1.srt:John track2.srt:Mary)'
+    )
+    
+    merge_parser.add_argument(
+        '--time-delta',
+        type=float,
+        default=2.0,
+        help='Maximum pause (seconds) between segments to merge from same speaker (default: 2.0)'
+    )
+    
+    merge_parser.add_argument(
+        '--no-consolidate',
+        action='store_true',
+        help='Do not consolidate consecutive lines from same speaker'
+    )
+    
+    merge_parser.add_argument(
+        '--format',
+        choices=['txt', 'srt', 'json'],
+        default='txt',
+        help='Output format (default: txt)'
+    )
+    
+    merge_parser.add_argument(
+        '--no-timestamps',
+        action='store_true',
+        help='Exclude timestamps from text output'
+    )
+    
+    merge_parser.add_argument(
+        '--no-speaker',
+        action='store_true',
+        help='Exclude speaker labels from text output'
+    )
+    
+    return merge_parser
+
+
+def handle_merge_command(args):
+    """Handle the merge subcommand"""
+    # Parse transcription file arguments
+    transcription_files = []
+    for arg in args.transcriptions:
+        if ':' not in arg:
+            print(f"Error: Invalid format for transcription file: {arg}")
+            print("Expected format: filepath:SpeakerName")
+            sys.exit(1)
+        
+        file_path, speaker_id = arg.split(':', 1)
+        transcription_files.append((file_path, speaker_id))
+    
+    try:
+        merge_multi_speaker_transcriptions(
+            transcription_files=transcription_files,
+            output_path=args.output,
+            time_delta=args.time_delta,
+            consolidate=not args.no_consolidate,
+            output_format=args.format,
+            include_timestamps=not args.no_timestamps,
+            include_speaker=not args.no_speaker
+        )
+    except Exception as e:
+        print(f"Error merging transcriptions: {e}")
+        logging.exception("Merge failed")
+        sys.exit(1)
+
+
 def parse(app: Application, parser: QCommandLineParser):
     parser.addPositionalArgument("<command>", "One of the following commands:\n- add")
     parser.parse(app.arguments())
@@ -271,6 +357,38 @@ def parse(app: Application, parser: QCommandLineParser):
     command = args[0]
     if command == "add":
         _handle_add_command(app, parser)
+    elif command == "merge":
+        parser.clearPositionalArguments()
+        parser.addPositionalArgument("transcriptions", "Transcription files", "[file:file ...]")
+        parser.addPositionalArgument("output", "Output file")
+        parser.process(app)
+
+        class MergeArgs:
+            pass
+
+        merge_args = MergeArgs()
+        merge_args.transcriptions = parser.positionalArguments()[:-1]
+        merge_args.output = parser.positionalArguments()[-1]
+        merge_args.time_delta = 2.0
+        merge_args.no_consolidate = False
+        merge_args.format = "txt"
+        merge_args.no_timestamps = False
+        merge_args.no_speaker = False
+
+        for opt in parser.options():
+            if opt.isSet():
+                if opt == parser.optionForName("time-delta"):
+                    merge_args.time_delta = opt.value()
+                elif opt == parser.optionForName("no-consolidate"):
+                    merge_args.no_consolidate = True
+                elif opt == parser.optionForName("format"):
+                    merge_args.format = opt.value()
+                elif opt == parser.optionForName("no-timestamps"):
+                    merge_args.no_timestamps = True
+                elif opt == parser.optionForName("no-speaker"):
+                    merge_args.no_speaker = True
+
+        handle_merge_command(merge_args)
 
 T = typing.TypeVar("T", bound=enum.Enum)
 

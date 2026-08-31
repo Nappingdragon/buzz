@@ -56,6 +56,7 @@ from buzz.widgets.transcription_tasks_table_widget import (
 from buzz.widgets.transcription_viewer.transcription_viewer_widget import (
     TranscriptionViewerWidget,
 )
+from buzz.widgets.multi_speaker_merge_dialog import MultiSpeakerMergeDialog
 
 
 def find_media_files_in_folder(folder: str) -> List[str]:
@@ -196,6 +197,47 @@ class MainWindow(QMainWindow):
 
         #Initialize and run update checker
         self._init_update_checker()
+
+        self._setup_menu_bar()
+
+    def _setup_menu_bar(self):
+        # Add Tools menu if it doesn't exist, or add to existing Tools menu
+        tools_menu = self.menuBar().addMenu(_("Tools"))
+        
+        # Multi-speaker merge action
+        multi_speaker_action = tools_menu.addAction(_("Merge Multi-Speaker Transcriptions..."))
+        multi_speaker_action.triggered.connect(self._open_multi_speaker_merge_dialog)
+
+    def _open_multi_speaker_merge_dialog(self):
+        """Open the multi-speaker merge dialog"""
+        dialog = MultiSpeakerMergeDialog(self)
+        dialog.merge_completed.connect(self._on_merge_completed)
+        dialog.exec()
+
+    def _on_merge_completed(self, output_path: str):
+        """Handle merge completion"""
+        # Optionally show notification or open the file
+        from PyQt6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self,
+            _("Open File"),
+            _("Merge completed. Would you like to open the output file?"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            import subprocess
+            import platform
+            
+            try:
+                if platform.system() == 'Windows':
+                    subprocess.Popen(['notepad', output_path])
+                elif platform.system() == 'Darwin':  # macOS
+                    subprocess.Popen(['open', output_path])
+                else:  # Linux
+                    subprocess.Popen(['xdg-open', output_path])
+            except Exception as e:
+                QMessageBox.warning(self, _("Error"), _("Could not open file: {}").format(str(e)))
 
     def on_preferences_changed(self, preferences: Preferences):
         self.preferences = preferences
