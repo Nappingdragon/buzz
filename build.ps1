@@ -1,29 +1,37 @@
-# Quick build script for Buzz Windows
+# Quick build script for Buzz Windows - Portable Build to Buzz_build folder
 
-Write-Host "=== Buzz Windows Build Script ===" -ForegroundColor Cyan
+Write-Host "=== Buzz Windows Portable Build Script ===" -ForegroundColor Cyan
 Write-Host ""
 
+$TargetFolder = "..\Buzz_build"
+
 # Step 1: Clean
-Write-Host "[1/4] Cleaning previous builds..." -ForegroundColor Yellow
+Write-Host "[1/5] Cleaning previous builds..." -ForegroundColor Yellow
 make clean
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Warning: Clean step had issues, continuing anyway..." -ForegroundColor Yellow
 }
 
+# Clean target folder
+if (Test-Path $TargetFolder) {
+    Write-Host "Cleaning target folder: $TargetFolder" -ForegroundColor Yellow
+    Remove-Item "$TargetFolder\*" -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # Step 2: Build Whisper.cpp (if needed)
 if (-not (Test-Path "buzz\whisper_cpp\whisper-cli.exe")) {
-    Write-Host "`n[2/4] Building Whisper.cpp (this may take a while)..." -ForegroundColor Yellow
+    Write-Host "`n[2/5] Building Whisper.cpp (this may take a while)..." -ForegroundColor Yellow
     uv run make buzz/whisper_cpp
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Whisper.cpp build failed!" -ForegroundColor Red
         exit 1
     }
 } else {
-    Write-Host "`n[2/4] Whisper.cpp already built, skipping..." -ForegroundColor Green
+    Write-Host "`n[2/5] Whisper.cpp already built, skipping..." -ForegroundColor Green
 }
 
 # Step 3: Build application
-Write-Host "`n[3/4] Building application with PyInstaller (this will take 5-15 minutes)..." -ForegroundColor Yellow
+Write-Host "`n[3/5] Building application with PyInstaller (this will take 5-15 minutes)..." -ForegroundColor Yellow
 uv run pyinstaller --noconfirm Buzz.spec
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: PyInstaller build failed!" -ForegroundColor Red
@@ -38,26 +46,86 @@ if (Test-Path "dist\Buzz\Buzz.exe") {
     exit 1
 }
 
-# Step 5: Create installer
-Write-Host "`n[4/4] Creating installer with Inno Setup..." -ForegroundColor Yellow
-iscc installer.iss
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Installer creation failed!" -ForegroundColor Red
-    Write-Host "Make sure Inno Setup is installed and in PATH" -ForegroundColor Yellow
+# Step 5: Copy to Buzz_build folder
+Write-Host "`n[4/5] Copying portable build to $TargetFolder..." -ForegroundColor Yellow
+
+# Create target folder if it doesn't exist
+if (-not (Test-Path $TargetFolder)) {
+    New-Item -ItemType Directory -Path $TargetFolder | Out-Null
+}
+
+# Copy all files from dist\Buzz to Buzz_build
+Copy-Item "dist\Buzz\*" -Destination $TargetFolder -Recurse -Force
+
+if (Test-Path "$TargetFolder\Buzz.exe") {
+    Write-Host "Portable build copied successfully!" -ForegroundColor Green
+    
+    # Calculate size
+    $TotalSize = (Get-ChildItem $TargetFolder -Recurse | Measure-Object -Property Length -Sum).Sum
+    $SizeGB = [math]::Round($TotalSize / 1GB, 2)
+    Write-Host "Total size: $SizeGB GB" -ForegroundColor Gray
+} else {
+    Write-Host "ERROR: Failed to copy files to $TargetFolder" -ForegroundColor Red
     exit 1
 }
+
+# Step 6: Create a README in the portable folder
+Write-Host "`n[5/5] Creating README..." -ForegroundColor Yellow
+$ReadmeContent = @"
+# Buzz Portable Build - Multi-Speaker Merge Edition
+
+This is a portable build of Buzz with the multi-speaker transcription merge feature.
+
+## How to Run
+
+Simply double-click `Buzz.exe` to start the application.
+
+## New Feature: Multi-Speaker Merge
+
+Access via: **Tools → Merge Multi-Speaker Transcriptions...**
+
+This feature allows you to:
+- Combine transcriptions from multiple speaker tracks
+- Automatically synchronize by timestamps
+- Consolidate consecutive lines from the same speaker
+- Detect and merge overlapping speech
+- Export to TXT, SRT, or JSON formats
+
+## Settings
+
+Settings are saved to: `%LOCALAPPDATA%\Buzz\multi_speaker_merge.json`
+
+## System Requirements
+
+- Windows 10/11 (64-bit)
+- 8GB RAM minimum (16GB recommended)
+- GPU with Vulkan support (optional, for faster transcription)
+
+## Notes
+
+- This is a portable build - no installation required
+- You can move this entire folder anywhere
+- First run may take a moment to initialize
+- FFmpeg is included for audio processing
+
+Built on: $(Get-Date -Format "yyyy-MM-dd HH:mm")
+"@
+
+Set-Content -Path "$TargetFolder\README.txt" -Value $ReadmeContent
 
 # Success!
 Write-Host "`n=== Build Complete! ===" -ForegroundColor Green
 Write-Host ""
-Write-Host "Output files:" -ForegroundColor Cyan
-Get-ChildItem "dist\Buzz-Setup-*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-    Write-Host "  Installer: $($_.FullName)" -ForegroundColor White
-    Write-Host "  Size: $([math]::Round($_.Length / 1MB, 2)) MB" -ForegroundColor Gray
-}
-Write-Host "  Portable: $(Resolve-Path 'dist\Buzz')" -ForegroundColor White
+Write-Host "Portable build location:" -ForegroundColor Cyan
+Write-Host "  $(Resolve-Path $TargetFolder)" -ForegroundColor White
+Write-Host ""
+Write-Host "To run Buzz:" -ForegroundColor Yellow
+Write-Host "  1. Navigate to: $TargetFolder" -ForegroundColor White
+Write-Host "  2. Double-click: Buzz.exe" -ForegroundColor White
+Write-Host ""
+Write-Host "To create a ZIP archive:" -ForegroundColor Yellow
+Write-Host "  Compress-Archive -Path '$TargetFolder' -DestinationPath 'Buzz-Portable.zip'" -ForegroundColor White
 
-Write-Host "`nYou can now:" -ForegroundColor Yellow
 Write-Host "  1. Test: dist\Buzz\Buzz.exe" -ForegroundColor White
 Write-Host "  2. Install: dist\Buzz-Setup-*.exe" -ForegroundColor White
 Write-Host ""

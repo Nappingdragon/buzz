@@ -52,32 +52,43 @@ class CustomBuildHook(BuildHookInterface):
         # Get the project root directory
         project_root = Path(self.root)
 
-        try:
-            # Run the make command
-            result = subprocess.run(
-                ["make", "buzz/whisper_cpp"],
-                cwd=project_root,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            print(result.stdout)
-            if result.stderr:
-                print(result.stderr, file=sys.stderr)
-            print("Successfully built whisper.cpp binaries")
+        # Skip the make build entirely if whisper.cpp binaries already exist.
+        # This allows local dev builds on Windows (where GNU Make from
+        # chocolatey doesn't support the Unix-y commands in the Makefile
+        # like `uname`, `mktemp`) to reuse pre-built binaries copied in
+        # manually, instead of failing here.
+        whisper_cpp_dir = project_root / "buzz" / "whisper_cpp"
+        skip_make = (whisper_cpp_dir / "whisper-cli.exe").exists() or (whisper_cpp_dir / "whisper-cli").exists()
 
-            # Run the make command for translation files
-            result = subprocess.run(
-                ["make", "translation_mo"],
-                cwd=project_root,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            print(result.stdout)
-            if result.stderr:
-                print(result.stderr, file=sys.stderr)
-            print("Successfully compiled translation files")
+        try:
+            if skip_make:
+                print(f"Found existing whisper.cpp binaries in {whisper_cpp_dir}, skipping 'make buzz/whisper_cpp' and 'make translation_mo'")
+            else:
+                # Run the make command
+                result = subprocess.run(
+                    ["make", "buzz/whisper_cpp"],
+                    cwd=project_root,
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                print(result.stdout)
+                if result.stderr:
+                    print(result.stderr, file=sys.stderr)
+                print("Successfully built whisper.cpp binaries")
+
+                # Run the make command for translation files
+                result = subprocess.run(
+                    ["make", "translation_mo"],
+                    cwd=project_root,
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                print(result.stdout)
+                if result.stderr:
+                    print(result.stderr, file=sys.stderr)
+                print("Successfully compiled translation files")
 
             # Patch and build the ctc_forced_aligner C++ extension in-place.
             # Shared with `make test` via scripts/build_ctc_forced_aligner.py;
