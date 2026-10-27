@@ -44,6 +44,9 @@ class MultiSpeakerTranscriptionMerger:
         self.overlap_threshold = 0.1  # Default overlap threshold in seconds
         self.duration_estimation_wpm = 150  # Words per minute for duration estimation
         self.sequential_spacing = 0.1  # Gap between consolidated speakers
+        self.trim_min_duration = 0.5  # Never trim a segment shorter than this (seconds)
+        self.trim_max_factor = 1.5  # Allowed duration = estimated duration * this factor
+        self.trim_end_only = False  # If True, only the end time is ever trimmed
         self.logger = logging.getLogger(__name__)
     
     def parse_srt_file(self, file_path: Path, speaker_id: str) -> List[TimestampedSegment]:
@@ -386,6 +389,57 @@ class MultiSpeakerTranscriptionMerger:
         self.logger.info(f"Merged total of {len(all_segments)} segments")
         return all_segments
     
+    def trim_empty_spaces(self, segments: List[TimestampedSegment]) -> List[TimestampedSegment]:
+        """
+        Shorten segments whose time span is much longer than their text needs
+        (e.g. a single short word spanning 2-3 seconds), which otherwise causes
+        false overlaps with other speakers.
+
+        The allowed duration is estimated from the text length and the configured
+        speaking rate (with a minimum). Which edge is trimmed:
+        - If the segment follows a pause (or is the speaker's first segment), the
+          start is inflated, so the start is moved forward (end is kept).
+        - Otherwise the end is moved back (start is kept).
+
+        Returns a new list sorted by start time.
+        """
+        chars_per_second = self.duration_estimation_wpm * 5 / 60
+        by_speaker = {}
+        for seg in segments:
+            by_speaker.setdefault(seg.speaker_id, []).append(seg)
+        
+        result = []
+        trimmed_count = 0
+        for speaker_segments in by_speaker.values():
+            speaker_segments.sort(key=lambda s: s.start_time)
+            previous_end = None
+            for seg in speaker_segments:
+                duration = seg.end_time - seg.start_time
+                allowed = max(
+                    self.trim_min_duration,
+                    len(seg.text.strip()) / chars_per_second * self.trim_max_factor
+                )
+                start, end = seg.start_time, seg.end_time
+                if duration > allowed:
+                    after_pause = (previous_end is None or
+                                   seg.start_time - previous_end > self.overlap_threshold)
+                    if after_pause and not self.trim_end_only:
+                        start = end - allowed
+                    else:
+                        end = start + allowed
+                    trimmed_count += 1
+                result.append(TimestampedSegment(
+                    start_time=start,
+                    end_time=end,
+                    text=seg.text,
+                    speaker_id=seg.speaker_id
+                ))
+                previous_end = seg.end_time  # original end: detects real pauses
+        
+        result.sort(key=lambda s: s.start_time)
+        self.logger.info(f"Trimmed {trimmed_count} overlong segments")
+        return result
+    
     def consolidate_speaker_lines(self, segments: List[TimestampedSegment]) -> List[TimestampedSegment]:
         """
         Consolidate consecutive segments from the same speaker into single lines.
@@ -644,7 +698,11 @@ def merge_multi_speaker_transcriptions(
     sequential_spacing: float = 0.1,
     output_format: str = "txt",
     include_timestamps: bool = True,
-    include_speaker: bool = True
+    include_speaker: bool = True,
+    trim_empty_spaces: bool = False,
+    trim_end_only: bool = False,
+    trim_min_duration: float = 0.5,
+    trim_max_factor: float = 1.5
 ) -> None:
     """
     Convenience function to merge multiple speaker transcriptions.
@@ -661,6 +719,11 @@ def merge_multi_speaker_transcriptions(
         output_format: Output format ("txt", "srt", "json")
         include_timestamps: Include timestamps in text output
         include_speaker: Include speaker labels in text output
+        trim_empty_spaces: Shorten segments with unrealistically long time spans
+            (applied before overlap fixing)
+        trim_end_only: Only ever trim the end time (never the start)
+        trim_min_duration: Segments shorter than this are never trimmed (seconds)
+        trim_max_factor: Allowed duration = estimated speaking duration * this factor
     """
     logging.basicConfig(level=logging.INFO)
     
@@ -670,12 +733,19 @@ def merge_multi_speaker_transcriptions(
     merger.overlap_threshold = overlap_threshold
     merger.duration_estimation_wpm = duration_estimation_wpm
     merger.sequential_spacing = sequential_spacing
+    merger.trim_end_only = trim_end_only
+    merger.trim_min_duration = trim_min_duration
+    merger.trim_max_factor = trim_max_factor
     
     # Convert string paths to Path objects
     file_tuples = [(Path(f), speaker) for f, speaker in transcription_files]
     
     # Merge transcriptions
     segments = merger.merge_transcriptions(file_tuples)
+    
+    # Trim overlong segments first so they don't cause false overlaps
+    if trim_empty_spaces:
+        segments = merger.trim_empty_spaces(segments)
     
     # Fix overlapping speech if requested (before consolidation)
     if fix_overlapping_speech:
