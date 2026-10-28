@@ -5,18 +5,14 @@ Write-Host ""
 
 $TargetFolder = "..\Buzz_build"
 
-# Step 1: Clean
-Write-Host "[1/5] Cleaning previous builds..." -ForegroundColor Yellow
-make clean
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Warning: Clean step had issues, continuing anyway..." -ForegroundColor Yellow
-}
+# Step 1: Clean PyInstaller output only.
+# NOTE: 'make clean' is intentionally NOT used, because it deletes buzz\whisper_cpp
+# and whisper.cpp\build, which are slow to rebuild and need a full toolchain.
+Write-Host "[1/5] Cleaning previous PyInstaller output..." -ForegroundColor Yellow
+if (Test-Path "dist") { Remove-Item "dist" -Recurse -Force -ErrorAction SilentlyContinue }
+if (Test-Path "build\Buzz") { Remove-Item "build\Buzz" -Recurse -Force -ErrorAction SilentlyContinue }
 
-# Clean target folder
-if (Test-Path $TargetFolder) {
-    Write-Host "Cleaning target folder: $TargetFolder" -ForegroundColor Yellow
-    Remove-Item "$TargetFolder\*" -Recurse -Force -ErrorAction SilentlyContinue
-}
+# The target folder is cleaned later, only after PyInstaller has succeeded.
 
 # Step 2: Build Whisper.cpp (if needed)
 if (-not (Test-Path "buzz\whisper_cpp\whisper-cli.exe")) {
@@ -52,6 +48,10 @@ Write-Host "`n[4/5] Copying portable build to $TargetFolder..." -ForegroundColor
 # Create target folder if it doesn't exist
 if (-not (Test-Path $TargetFolder)) {
     New-Item -ItemType Directory -Path $TargetFolder | Out-Null
+} else {
+    # Build succeeded, so it is now safe to clear the old portable build
+    Write-Host "Cleaning target folder: $TargetFolder" -ForegroundColor Yellow
+    Remove-Item "$TargetFolder\*" -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # Copy all files from dist\Buzz to Buzz_build
